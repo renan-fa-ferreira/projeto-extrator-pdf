@@ -1,0 +1,296 @@
+================================================================================
+SISTEMA UNIVERSAL DE EXTRAÇÃO DE EXTRATOS BANCÁRIOS
+================================================================================
+Copie cada seção abaixo para o arquivo correspondente na sua máquina.
+
+================================================================================
+ARQUIVO: extract_universal.py
+CAMINHO: /extract_universal.py
+================================================================================
+#!/usr/bin/env python3
+"""Script principal para extração universal"""
+
+import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
+
+from core.universal_extractor import main
+
+if __name__ == "__main__":
+    main()
+
+================================================================================
+ARQUIVO: src/core/__init__.py
+CAMINHO: /src/core/__init__.py
+================================================================================
+# Arquivo vazio - necessário para Python reconhecer como módulo
+
+================================================================================
+ARQUIVO: src/core/bank_detector.py
+CAMINHO: /src/core/bank_detector.py
+================================================================================
+#!/usr/bin/env python3
+"""Detector automático de bancos"""
+
+import pdfplumber
+import re
+from enum import Enum
+
+class BankType(Enum):
+    BANCO_DO_BRASIL = "bb"
+    BRADESCO = "bradesco"
+    BRADESCO_INVESTIMENTOS = "bradesco_investimentos"
+    ITAU = "itau"
+    CAIXA = "caixa"
+    SANTANDER = "santander"
+    NUBANK = "nubank"
+    INTER = "inter"
+    SICOOB = "sicoob"
+    SICREDI = "sicredi"
+    BANRISUL = "banrisul"
+    BRB = "brb"
+    SAFRA = "safra"
+    VOTORANTIM = "votorantim"
+    ORIGINAL = "original"
+    PAN = "pan"
+    PINE = "pine"
+    C6 = "c6"
+    NEXT = "next"
+    UNKNOWN = "unknown"
+
+class BankDetector:
+    
+    BANK_PATTERNS = {
+        BankType.BANCO_DO_BRASIL: [
+            r'BANCO DO BRASIL',
+            r'001.*BANCO DO BRASIL',
+            r'Dt\.\s*movimento.*Dt\.\s*balancete.*Histórico.*Documento.*Valor R\$.*Saldo',
+            r'Ag[eê]ncia\s*\d+-\d+',
+            r'Conta corrente.*\d+-\d+'
+        ],
+        
+        BankType.BRADESCO: [
+            r'BANCO BRADESCO',
+            r'BRADESCO S/A',
+            r'Ag[eê]ncia.*\|\s*Conta',
+            r'Data.*Lan[çc]amento.*D[ée]bito.*Cr[ée]dito.*Saldo',
+            r'CNPJ:.*\d{3}\.\d{3}\.\d{3}/\d{4}-\d{2}'
+        ],
+        
+        BankType.BRADESCO_INVESTIMENTOS: [
+            r'BRADESCO FI RF',
+            r'BRADESCO FIC FI',
+            r'Resumo dos Investimentos',
+            r'Produto.*C\.N\.P\.J',
+            r'Administrador.*C\.N\.P\.J'
+        ],
+        
+        BankType.ITAU: [
+            r'BANCO ITA[UÚ]',
+            r'ITA[UÚ] UNIBANCO',
+            r'341.*ITA[UÚ]',
+            r'Ag[eê]ncia.*\d{4}',
+            r'Conta.*\d+-\d+'
+        ],
+        
+        BankType.CAIXA: [
+            r'CAIXA ECON[ÔO]MICA',
+            r'CAIXA.*104',
+            r'CEF',
+            r'C\.E\.F\.',
+            r'104.*CAIXA',
+            r'Ag[eê]ncia.*\d{4}.*Op.*\d+',
+            r'EXTRATO.*CONTA.*CORRENTE.*CAIXA',
+            r'www\.caixa\.gov\.br',
+            r'GOVCONTA CAIXA'
+        ],
+        
+        BankType.SANTANDER: [
+            r'BANCO SANTANDER',
+            r'SANTANDER.*033',
+            r'Ag[eê]ncia.*\d{4}'
+        ],
+        
+        BankType.NUBANK: [
+            r'NUBANK',
+            r'NU PAGAMENTOS',
+            r'NUCONTA',
+            r'Roxinho'
+        ],
+        
+        BankType.INTER: [
+            r'BANCO INTER',
+            r'INTER.*077',
+            r'INTERMEDIUM'
+        ],
+        
+        BankType.SICOOB: [
+            r'SICOOB',
+            r'COOPERATIVA.*CREDITO',
+            r'756.*SICOOB'
+        ],
+        
+        BankType.SICREDI: [
+            r'SICREDI',
+            r'748.*SICREDI',
+            r'COOPERATIVA.*SICREDI'
+        ],
+        
+        BankType.BANRISUL: [
+            r'BANRISUL',
+            r'041.*BANRISUL',
+            r'BANCO.*RIO GRANDE'
+        ],
+        
+        BankType.BRB: [
+            r'BRB.*BANCO',
+            r'070.*BRB',
+            r'BRASILIA'
+        ],
+        
+        BankType.SAFRA: [
+            r'BANCO SAFRA',
+            r'422.*SAFRA',
+            r'J\. SAFRA'
+        ],
+        
+        BankType.VOTORANTIM: [
+            r'VOTORANTIM',
+            r'655.*VOTORANTIM',
+            r'BV.*FINANCEIRA'
+        ],
+        
+        BankType.ORIGINAL: [
+            r'BANCO ORIGINAL',
+            r'212.*ORIGINAL',
+            r'ORIGINAL.*INVESTIMENTOS'
+        ],
+        
+        BankType.PAN: [
+            r'BANCO PAN',
+            r'623.*PAN',
+            r'PANAMERICANO'
+        ],
+        
+        BankType.PINE: [
+            r'PINE',
+            r'643.*PINE',
+            r'BANCO PINE'
+        ],
+        
+        BankType.C6: [
+            r'C6 BANK',
+            r'336.*C6',
+            r'BANCO C6'
+        ],
+        
+        BankType.NEXT: [
+            r'NEXT',
+            r'237.*NEXT',
+            r'BRADESCO NEXT'
+        ]
+    }
+    
+    @classmethod
+    def detect_bank(cls, pdf_path: str) -> BankType:
+        """Detecta o banco baseado no conteúdo do PDF"""
+        
+        try:
+            with pdfplumber.open(pdf_path) as pdf:
+                text_sample = ""
+                for page in pdf.pages[:3]:
+                    text_sample += page.extract_text() + "\n"
+                
+                for bank_type, patterns in cls.BANK_PATTERNS.items():
+                    score = 0
+                    
+                    for pattern in patterns:
+                        if re.search(pattern, text_sample, re.IGNORECASE):
+                            score += 1
+                    
+                    if score >= 2:
+                        return bank_type
+                
+                return BankType.UNKNOWN
+                
+        except Exception as e:
+            print(f"Erro ao detectar banco em {pdf_path}: {e}")
+            return BankType.UNKNOWN
+    
+    @classmethod
+    def get_bank_info(cls, bank_type: BankType) -> dict:
+        """Retorna informações do banco"""
+        
+        bank_info = {
+            BankType.BANCO_DO_BRASIL: {'name': 'Banco do Brasil', 'code': '001', 'extractor': 'bb'},
+            BankType.BRADESCO: {'name': 'Banco Bradesco S/A', 'code': '237', 'extractor': 'bradesco'},
+            BankType.BRADESCO_INVESTIMENTOS: {'name': 'Bradesco Investimentos', 'code': '237', 'extractor': 'bradesco_investimentos'},
+            BankType.ITAU: {'name': 'Banco Itaú Unibanco S/A', 'code': '341', 'extractor': 'itau'},
+            BankType.CAIXA: {'name': 'Caixa Econômica Federal', 'code': '104', 'extractor': 'caixa'},
+            BankType.SANTANDER: {'name': 'Banco Santander', 'code': '033', 'extractor': 'santander'},
+            BankType.NUBANK: {'name': 'Nubank', 'code': '260', 'extractor': 'nubank'},
+            BankType.INTER: {'name': 'Banco Inter', 'code': '077', 'extractor': 'inter'},
+            BankType.SICOOB: {'name': 'Sicoob', 'code': '756', 'extractor': 'sicoob'},
+            BankType.SICREDI: {'name': 'Sicredi', 'code': '748', 'extractor': 'sicredi'},
+            BankType.BANRISUL: {'name': 'Banrisul', 'code': '041', 'extractor': 'banrisul'},
+            BankType.BRB: {'name': 'BRB - Banco de Brasília', 'code': '070', 'extractor': 'brb'},
+            BankType.SAFRA: {'name': 'Banco Safra', 'code': '422', 'extractor': 'safra'},
+            BankType.VOTORANTIM: {'name': 'Banco Votorantim', 'code': '655', 'extractor': 'votorantim'},
+            BankType.ORIGINAL: {'name': 'Banco Original', 'code': '212', 'extractor': 'original'},
+            BankType.PAN: {'name': 'Banco PAN', 'code': '623', 'extractor': 'pan'},
+            BankType.PINE: {'name': 'Banco Pine', 'code': '643', 'extractor': 'pine'},
+            BankType.C6: {'name': 'C6 Bank', 'code': '336', 'extractor': 'c6'},
+            BankType.NEXT: {'name': 'Next (Bradesco)', 'code': '237', 'extractor': 'next'},
+            BankType.UNKNOWN: {'name': 'Banco não identificado', 'code': '000', 'extractor': 'generic'}
+        }
+        
+        return bank_info.get(bank_type, bank_info[BankType.UNKNOWN])
+
+================================================================================
+ARQUIVO: src/core/extractor_factory.py
+CAMINHO: /src/core/extractor_factory.py
+================================================================================
+#!/usr/bin/env python3
+"""Factory para criar extractors específicos"""
+
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from core.bank_detector import BankType
+from parsers.base_extractor import BaseExtractor
+
+class ExtractorFactory:
+    """Factory para criar extractors baseado no tipo de banco"""
+    
+    @staticmethod
+    def create_extractor(bank_type: BankType, pdf_path: str) -> BaseExtractor:
+        """Cria extractor específico para o banco"""
+        
+        if bank_type == BankType.BANCO_DO_BRASIL:
+            from parsers.bb.bb_extractor_adapter import BBExtractorAdapter
+            return BBExtractorAdapter(pdf_path)
+        
+        elif bank_type == BankType.BRADESCO:
+            from parsers.bradesco.bradesco_cc_adapter import BradescoCCAdapter
+            return BradescoCCAdapter(pdf_path)
+        
+        elif bank_type == BankType.BRADESCO_INVESTIMENTOS:
+            from parsers.bradesco.bradesco_inv_adapter import BradescoInvAdapter
+            return BradescoInvAdapter(pdf_path)
+        
+        elif bank_type == BankType.ITAU:
+            from parsers.itau.itau_adapter import ItauAdapter
+            return ItauAdapter(pdf_path)
+        
+        elif bank_type == BankType.CAIXA:
+            from parsers.caixa.caixa_adapter import CaixaAdapter
+            return CaixaAdapter(pdf_path)
+        
+        else:
+            from parsers.generic_smart_extractor import GenericSmartExtractor
+            return GenericSmartExtractor(pdf_path)
+
+================================================================================
+CONTINUA NO PRÓXIMO BLOCO...
+================================================================================

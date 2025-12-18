@@ -1,4 +1,4 @@
-# ===== PROJETO EXTRATOR PDF =====
+# ===== EXTRATOR PDF BANCÁRIO =====
 
 # Ambiente Python
 __pycache__/
@@ -7,39 +7,27 @@ __pycache__/
 venv/
 .env
 
-# Dados sensíveis - PDFs e Excel
+# Dados sensíveis
 data/input/*.pdf
 data/output/*.xlsx
 *.pdf
 *.xlsx
 
-# Logs
+# Logs e temporários
 logs/
 *.log
-
-# Arquivos temporários
 data/temp/*
 !data/temp/.gitkeep
 
-# Pastas desnecessárias
+# Pastas não essenciais
 obsoleto/
-src/
 tools/
 tests/
 docs/
 config/
 
-# Scripts antigos
-extract_universal.py
-gerar_estrutura.py
-main.py
-
-# IDEs
+# IDEs e OS
 .vscode/
 .idea/
-*.swp
-*.swo
-
-# Sistema operacional
 .DS_Store
 Thumbs.db

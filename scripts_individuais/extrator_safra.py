@@ -90,7 +90,8 @@ def extract_safra_data(pdf_path):
 
 def main():
     # Definir pastas
-    input_dir = Path("data/input")
+    script_dir = Path(__file__).parent
+    input_dir = script_dir.parent / "data" / "input"
     
     # Procurar PDFs do Safra na pasta input
     safra_files = []
@@ -115,9 +116,15 @@ def main():
     # Criar DataFrame
     df = pd.DataFrame(transactions)
     
+    # Ordenar por data, documento, descrição
+    df['Data_Sort'] = pd.to_datetime(df['Data'], format='%d/%m/%Y', errors='coerce')
+    df['Data_Sort'] = df['Data_Sort'].fillna(pd.to_datetime(df['Data'], format='%d/%m', errors='coerce'))
+    df = df.sort_values(['Data_Sort', 'Descrição'], na_position='last')
+    df = df.drop('Data_Sort', axis=1)
+    
     # Salvar em Excel na pasta output
-    output_path = Path("data/input/output") / (pdf_path.stem + "_safra_extraido.xlsx")
-    Path("data/input/output").mkdir(parents=True, exist_ok=True)
+    output_path = Path("data/output") / (pdf_path.stem + "_safra_extraido.xlsx")
+    Path("data/output").mkdir(parents=True, exist_ok=True)
     df.to_excel(output_path, index=False)
     
     print(f"Dados extraídos salvos em: {output_path}")

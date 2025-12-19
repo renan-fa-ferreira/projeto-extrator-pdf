@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Extrator genérico para bancos não específicos"""
+"""Extrator genérico melhorado - preparado para novos bancos"""
 
 import pdfplumber
 import pandas as pd
@@ -8,214 +8,398 @@ import sys
 from pathlib import Path
 from datetime import datetime
 
-def detect_bank_from_text(text):
-    """Detecta o banco baseado no texto do PDF"""
-    bank_patterns = {
-        'Banco do Brasil': ['BANCO DO BRASIL', 'BB', '001'],
-        'Banco Bradesco S/A': ['BRADESCO', '237'],
-        'Banco Itaú': ['ITAU', 'ITAÚ', '341'],
-        'Caixa Econômica Federal': ['CAIXA', 'CEF', '104'],
-        'Banco Safra': ['SAFRA', '422'],
-        'Banco Daycoval': ['DAYCOVAL', '707'],
-        'Banco BV': ['BV', 'VOTORANTIM', '655'],
-        'Banco ABC Brasil': ['ABC', '246']
+def concatenate_description_lines(lines, start_index):
+    """Concatena linhas de descrição que foram quebradas - versão corrigida"""
+    description_parts = []
+    i = start_index
+    
+    while i >= 0:
+        line = lines[i].strip()
+        
+        # Para se encontrar linha com números (valores/documentos) ou data
+        if (re.search(r'\d{1,3}(?:\.\d{3})*,\d{2}', line) or 
+            re.search(r'\d{2}/\d{2}/\d{4}', line) or
+            line.isdigit() or
+            not line or
+            len(line) < 3):
+            break
+            
+        # Adiciona a linha à descrição
+        description_parts.insert(0, line)
+        i -= 1
+        
+        # Limita a 3 linhas para evitar pegar dados irrelevantes
+        if len(description_parts) >= 3:
+            break
+    
+    return ' '.join(description_parts) if description_parts else "Operação Bancária"
+
+def detect_bank(text, filename=""):
+    """Detecta o banco - preparado para novos bancos"""
+    text_upper = text.upper()
+    filename_upper = filename.upper()
+    
+    bank_keywords = {
+        'Banco Bradesco S/A': {
+            'file': ['BRADESCO'],
+            'text': ['BRADESCO', 'BANCO BRADESCO', '237', 'AG:', 'CC:', 'EXTRATO DE:']
+        },
+        'Banco Itaú': {
+            'file': ['ITAU', 'ITAÚ'],
+            'text': ['ITAU', 'ITAÚ', 'BANCO ITAU', '341', 'AGENCIA/CONTA:']
+        },
+        'Caixa Econômica Federal': {
+            'file': ['CEF', 'CAIXA'],
+            'text': ['CAIXA ECONOMICA', 'CEF', '104', 'CONTA REFERENCIA']
+        },
+        'Banco Safra': {
+            'file': ['SAFRA'],
+            'text': ['BANCO SAFRA', 'SAFRA', '422', 'SALDO TOTAL']
+        },
+        'Banco Daycoval': {
+            'file': ['DAYCOVAL'],
+            'text': ['DAYCOVAL', '707', 'BANCO DAYCOVAL']
+        },
+        'Banco ABC Brasil': {
+            'file': ['ABC'],
+            'text': ['ABC BRASIL', 'BANCO ABC', '246']
+        },
+        'Banco BV': {
+            'file': ['VOTORANTIM', 'BV'],
+            'text': ['BANCO VOTORANTIM', 'BV', '655', 'CONTA VINCULADA']
+        },
+        'Citibank': {
+            'file': ['CITI'],
+            'text': ['CITIBANK', 'CITI', '745']
+        },
+        'Oliveira Trust': {
+            'file': ['OT'],
+            'text': ['OLIVEIRA TRUST', 'DISTRIBUIDORA DE TITULOS', 'CONTA CORRENTE EM REAIS']
+        },
+        'Vortx': {
+            'file': ['VORTX'],
+            'text': ['VORTX', 'ULTIMOS LANCAMENTOS', 'REMETENTE/FAVORECIDO']
+        },
+        # Preparado para novos bancos
+        'Banco Santander': {
+            'file': ['SANTANDER'],
+            'text': ['SANTANDER', 'BANCO SANTANDER', '033']
+        },
+        'Nubank': {
+            'file': ['NUBANK', 'NU'],
+            'text': ['NUBANK', 'NU PAGAMENTOS', '260']
+        },
+        'Banco Inter': {
+            'file': ['INTER'],
+            'text': ['BANCO INTER', 'INTER', '077']
+        },
+        'C6 Bank': {
+            'file': ['C6'],
+            'text': ['C6 BANK', 'BANCO C6', '336']
+        },
+        'Banco do Brasil': {
+            'file': ['BB'],
+            'text': ['BANCO DO BRASIL', 'BB', '001', 'AGENCIA:', 'CONTA CORRENTE']
+        }
     }
     
-    for banco, keywords in bank_patterns.items():
-        if any(keyword in text.upper() for keyword in keywords):
-            return banco
+    # Verificar pelo nome do arquivo primeiro
+    for bank_name, keywords in bank_keywords.items():
+        if any(keyword in filename_upper for keyword in keywords['file']):
+            return bank_name
     
-    return 'Banco Não Identificado'
+    # Verificar pelo conteúdo do texto
+    for bank_name, keywords in bank_keywords.items():
+        if any(keyword in text_upper for keyword in keywords['text']):
+            return bank_name
+    
+    return 'Banco Genérico'
 
-def extract_generic_data(pdf_path):
-    """Extrai dados usando múltiplas estratégias genéricas com detecção automática"""
-    transactions = []
+def extract_metadata(text, bank_name):
+    """Extrai metadados específicos por banco"""
     metadata = {
-        'banco': 'Banco Não Identificado',
+        'banco': bank_name,
         'codigo_banco': '',
         'agencia': '',
         'conta': '',
         'periodo': ''
     }
     
-    try:
-        with pdfplumber.open(pdf_path) as pdf:
-            # Detectar banco na primeira página
-            if pdf.pages:
-                first_page_text = pdf.pages[0].extract_text()
-                if first_page_text:
-                    metadata['banco'] = detect_bank_from_text(first_page_text)
-                    
-                    # Extrair metadados genéricos
-                    agencia_match = re.search(r'Ag[eê]ncia[:\s]*(\d+[-]?\d*)', first_page_text)
-                    if agencia_match:
-                        metadata['agencia'] = agencia_match.group(1)
-                    
-                    conta_match = re.search(r'Conta[:\s]*(\d+[-]?\d*)', first_page_text)
-                    if conta_match:
-                        metadata['conta'] = conta_match.group(1)
+    bank_codes = {
+        'Banco do Brasil': '001',
+        'Banco Bradesco S/A': '237',
+        'Banco Itaú': '341',
+        'Caixa Econômica Federal': '104',
+        'Banco Safra': '422',
+        'Banco Daycoval': '707',
+        'Banco ABC Brasil': '246',
+        'Banco BV': '655',
+        'Citibank': '745',
+        'Oliveira Trust': '999',
+        'Vortx': '998',
+        'Banco Santander': '033',
+        'Nubank': '260',
+        'Banco Inter': '077',
+        'C6 Bank': '336'
+    }
+    
+    metadata['codigo_banco'] = bank_codes.get(bank_name, '')
+    
+    # Padrões específicos por banco
+    if 'Bradesco' in bank_name:
+        agencia_match = re.search(r'Ag:\s*(\d+)', text)
+        conta_match = re.search(r'CC:\s*(\d+-\d+)', text)
+        periodo_match = re.search(r'Entre\s+(\d{2}/\d{2}/\d{4})\s+e\s+(\d{2}/\d{2}/\d{4})', text)
+    elif 'Itaú' in bank_name:
+        agencia_conta_match = re.search(r'Agência/Conta:\s*(\d+)/(\d+-\d+)', text)
+        if agencia_conta_match:
+            metadata['agencia'] = agencia_conta_match.group(1)
+            metadata['conta'] = agencia_conta_match.group(2)
+        periodo_match = re.search(r'Extrato de\s+(\d{2}/\d{2}/\d{4})\s+até\s+(\d{2}/\d{2}/\d{4})', text)
+    elif 'BV' in bank_name or 'Votorantim' in bank_name:
+        conta_match = re.search(r'Conta:\s*([\d.-]+)', text)
+        periodo_match = re.search(r'Período:\s*(\d{2}/\d{2}/\d{4})\s+à\s+(\d{2}/\d{2}/\d{4})', text)
+    elif 'Oliveira Trust' in bank_name:
+        conta_match = re.search(r'Conta:\s*(\d+\s*-\s*\d+)', text)
+        periodo_match = re.search(r'Data de Início\s+(\d{2}/\d{2}/\d{4})\s+Data de Fim\s+(\d{2}/\d{2}/\d{4})', text)
+    elif 'Vortx' in bank_name:
+        conta_match = re.search(r'Conta:(\d+\s*-\s*\d+)', text)
+        periodo_match = None
+    else:
+        # Padrões genéricos
+        agencia_match = re.search(r'Ag[eê]ncia[:\s]*(\d+[-]?\d*)', text)
+        conta_match = re.search(r'Conta[:\s]*(\d+[-]?\d*)', text)
+        periodo_match = re.search(r'(\d{2}/\d{2}/\d{4})\s+[ae]\s+(\d{2}/\d{2}/\d{4})', text)
+    
+    if 'agencia_match' in locals() and agencia_match:
+        metadata['agencia'] = agencia_match.group(1)
+    if 'conta_match' in locals() and conta_match:
+        metadata['conta'] = conta_match.group(1).replace(' ', '')
+    if 'periodo_match' in locals() and periodo_match:
+        metadata['periodo'] = f"{periodo_match.group(1)} a {periodo_match.group(2)}"
+    
+    return metadata
+
+def extract_transactions_all_pages(pdf, bank_name):
+    """Extrai transações de TODAS as páginas - melhorado para novos bancos"""
+    transactions = []
+    current_date = None
+    
+    print(f"Processando {len(pdf.pages)} páginas...")
+    
+    for page_num, page in enumerate(pdf.pages):
+        text = page.extract_text()
+        if not text:
+            continue
+        
+        lines = text.split('\n')
+        print(f"Página {page_num + 1}: {len(lines)} linhas")
+        
+        for i, line in enumerate(lines):
+            line = line.strip()
+            if not line or line.startswith(('Data', 'Página', 'Extrato')):
+                continue
             
-            for page in pdf.pages:
-                text = page.extract_text()
-                if not text:
+            # Padrões específicos por banco
+            if 'Bradesco' in bank_name:
+                # Padrão principal: DOCUMENTO VALOR SALDO (linha com números)
+                transaction_match = re.search(r'^(\d+)\s+(\d{1,3}(?:\.\d{3})*,\d{2})\s+(\d{1,3}(?:\.\d{3})*,\d{2})$', line)
+                if transaction_match:
+                    doc = transaction_match.group(1)
+                    valor_str = transaction_match.group(2).replace('.', '').replace(',', '.')
+                    saldo_str = transaction_match.group(3).replace('.', '').replace(',', '.')
+                    
+                    # Concatenar descrição das linhas anteriores
+                    descricao = concatenate_description_lines(lines, i - 1)
+                    
+                    # Usar data atual ou tentar extrair da linha
+                    data_transacao = current_date if current_date else "01/01/2024"
+                    
+                    transactions.append({
+                        'Data': data_transacao,
+                        'Documento': doc,
+                        'Descrição': descricao,
+                        'Valor': float(valor_str),
+                        'Tipo': 'C',
+                        'Saldo': float(saldo_str)
+                    })
                     continue
                 
-                # Padrões universais baseados nos bancos implementados
-                patterns = [
-                    # Padrão BB: Data, ag, lote, histórico, doc, valor, tipo, saldo, tipo
-                    r'(\d{2}/\d{2}/\d{4})\s+(\d{4})\s+(\d{8})\s+(.+?)\s+(\d+[.,]\d+)\s+([\d.,]+)\s+([DC])\s+([\d.,]+)\s+([DC])',
-                    # Padrão Bradesco: Data, documento, valor com sinal, saldo
-                    r'(\d{2}/\d{2}/\d{4})\s+(\d+)\s+([+-]?[\d.,]+)\s+([\d.,]+)',
-                    # Padrão Caixa: Data, documento, descrição, valor+D/C, saldo+D/C
-                    r'(\d{2}/\d{2}/\d{4})\s+(\d+)\s+(.+?)\s+([\d.,]+)([DC])\s+([\d.,]+)([DC])',
-                    # Padrão Itaú: Data DD/MM, descrição, documento, valor com sinal
-                    r'(\d{2}/\d{2})\s+(.+?)\s+(\d+)\s+([\d.,]+)([+-])',
-                    # Padrão genérico com D/C
-                    r'(\d{2}/\d{2}/\d{4})\s+(.+?)\s+([\d.,]+)\s+([DC])\s+([\d.,]+)',
-                    # Padrão genérico simples
-                    r'(\d{2}/\d{2})\s+(.+?)\s+([\d.,]+)\s+([DC])',
-                    # Padrão com valores positivos/negativos
-                    r'(\d{2}/\d{2}(?:/\d{4})?)\s+(.+?)\s+([+-]?[\d.,]+)'
-                ]
+                # Padrão de data: captura nova data de transação
+                date_match = re.search(r'(\d{2}/\d{2}/\d{4})', line)
+                if date_match and not re.search(r'\d{1,3}(?:\.\d{3})*,\d{2}', line):
+                    current_date = date_match.group(1)
+                    continue
+            
+            elif 'Itaú' in bank_name:
+                # DD/MM DESCRIÇÃO DOCUMENTO VALOR
+                itau_match = re.search(r'^(\d{2}/\d{2})\s+(.+?)\s+(\d+)\s+([+-]?[\d.,]+)$', line)
+                if itau_match:
+                    data = itau_match.group(1)
+                    descricao = itau_match.group(2).strip()
+                    documento = itau_match.group(3)
+                    valor_str = itau_match.group(4).replace('.', '').replace(',', '.')
+                    
+                    tipo = 'D' if valor_str.startswith('-') else 'C'
+                    valor = float(valor_str.replace('-', ''))
+                    
+                    transactions.append({
+                        'Data': data,
+                        'Documento': documento,
+                        'Descrição': descricao,
+                        'Valor': valor,
+                        'Tipo': tipo,
+                        'Saldo': 0.0
+                    })
                 
-                for pattern in patterns:
-                    matches = list(re.finditer(pattern, text))
+                # DD/MM DESCRIÇÃO VALOR
+                else:
+                    itau_simple = re.search(r'^(\d{2}/\d{2})\s+(.+?)\s+([+-]?[\d.,]+)$', line)
+                    if itau_simple:
+                        data = itau_simple.group(1)
+                        descricao = itau_simple.group(2).strip()
+                        valor_str = itau_simple.group(3).replace('.', '').replace(',', '.')
+                        
+                        tipo = 'D' if valor_str.startswith('-') else 'C'
+                        valor = float(valor_str.replace('-', ''))
+                        
+                        transactions.append({
+                            'Data': data,
+                            'Documento': '',
+                            'Descrição': descricao,
+                            'Valor': valor,
+                            'Tipo': tipo,
+                            'Saldo': 0.0
+                        })
+            
+            elif 'Vortx' in bank_name:
+                # DD/MM/YYYY DESCRIÇÃO TED Recebida R$ VALOR R$ SALDO
+                vortx_match = re.search(r'(\d{2}/\d{2}/\d{4})\s+(.+?)\s+TED\s+Recebida\s+R\$\s+([\d.,]+)\s+R\$\s+([\d.,]+)', line)
+                if vortx_match:
+                    data = vortx_match.group(1)
+                    descricao = vortx_match.group(2).strip() + " TED Recebida"
+                    valor_str = vortx_match.group(3).replace('.', '').replace(',', '.')
+                    saldo_str = vortx_match.group(4).replace('.', '').replace(',', '.')
                     
-                    for match in matches:
+                    transactions.append({
+                        'Data': data,
+                        'Documento': '',
+                        'Descrição': descricao,
+                        'Valor': float(valor_str),
+                        'Tipo': 'C',
+                        'Saldo': float(saldo_str)
+                    })
+                
+                # DD/MM/YYYY DESCRIÇÃO -R$ VALOR R$ SALDO
+                else:
+                    vortx_debit = re.search(r'(\d{2}/\d{2}/\d{4})\s+(.+?)\s+-R\$\s+([\d.,]+)\s+R\$\s+([\d.,]+)', line)
+                    if vortx_debit:
+                        data = vortx_debit.group(1)
+                        descricao = vortx_debit.group(2).strip()
+                        valor_str = vortx_debit.group(3).replace('.', '').replace(',', '.')
+                        saldo_str = vortx_debit.group(4).replace('.', '').replace(',', '.')
+                        
+                        transactions.append({
+                            'Data': data,
+                            'Documento': '',
+                            'Descrição': descricao,
+                            'Valor': float(valor_str),
+                            'Tipo': 'D',
+                            'Saldo': float(saldo_str)
+                        })
+            
+            elif 'Oliveira Trust' in bank_name:
+                # DD/MM/YYYY DOCUMENTO VALOR SALDO
+                ot_match = re.search(r'(\d{2}/\d{2}/\d{4})\s+(\d+)\s+([\d.,]+)\s+([\d.,]+)', line)
+                if ot_match:
+                    data = ot_match.group(1)
+                    documento = ot_match.group(2)
+                    valor_str = ot_match.group(3).replace('.', '').replace(',', '.')
+                    saldo_str = ot_match.group(4).replace('.', '').replace(',', '.')
+                    
+                    # Procurar descrição na próxima linha
+                    descricao = "Operação Financeira"
+                    
+                    transactions.append({
+                        'Data': data,
+                        'Documento': documento,
+                        'Descrição': descricao,
+                        'Valor': float(valor_str),
+                        'Tipo': 'C',
+                        'Saldo': float(saldo_str)
+                    })
+            
+            elif 'Banco do Brasil' in bank_name:
+                # Padrão BB flexível: qualquer linha com data
+                bb_flex = re.search(r'(\d{2}/\d{2}/\d{4})\s+(.+)', line)
+                if bb_flex:
+                    data = bb_flex.group(1)
+                    resto = bb_flex.group(2).strip()
+                    
+                    # Tentar extrair valor e tipo do final
+                    valor_match = re.search(r'([\d.,]+)\s+([CD])\s*$', resto)
+                    if valor_match:
+                        valor_str = valor_match.group(1).replace('.', '').replace(',', '.')
+                        tipo = valor_match.group(2)
+                        descricao = resto[:valor_match.start()].strip()
+                        
+                        # Procurar descrição adicional na próxima linha
+                        if i + 1 < len(lines):
+                            next_line = lines[i + 1].strip()
+                            if next_line and not re.search(r'\d{2}/\d{2}/\d{4}', next_line) and len(next_line) > 5:
+                                descricao += " " + next_line
+                        
+                        transactions.append({
+                            'Data': data,
+                            'Documento': '',
+                            'Descrição': descricao,
+                            'Valor': float(valor_str),
+                            'Tipo': tipo,
+                            'Saldo': 0.0
+                        })
+                        continue
+            
+            else:
+                # Padrões genéricos para outros bancos (Santander, Nubank, etc.)
+                # Detectar nova data
+                date_only = re.search(r'^(\d{2}/\d{2}/\d{4})', line)
+                if date_only:
+                    current_date = date_only.group(1)
+                    continue
+                
+                date_short = re.search(r'^(\d{2}/\d{2})\s', line)
+                if date_short:
+                    current_date = date_short.group(1)
+                
+                # Transações genéricas
+                if current_date:
+                    generic_match = re.search(r'^(.+?)\s+([\d.,]+)\s*([DC]?)$', line)
+                    if generic_match and len(generic_match.group(1)) > 3:
+                        descricao = generic_match.group(1).strip()
+                        valor_str = generic_match.group(2).replace('.', '').replace(',', '.')
+                        tipo = generic_match.group(3) if generic_match.group(3) else 'C'
+                        
                         try:
-                            groups = match.groups()
-                            
-                            # Processar baseado no número de grupos
-                            if len(groups) == 9:  # Padrão BB completo
-                                data = groups[0]
-                                descricao = groups[3].strip()
-                                valor_str = groups[5].replace('.', '').replace(',', '.')
-                                tipo = groups[6]
-                                saldo_str = groups[7].replace('.', '').replace(',', '.')
-                                
-                                transactions.append({
-                                    'Banco': metadata['banco'],
-                                    'Agência': metadata['agencia'],
-                                    'Conta': metadata['conta'],
-                                    'Data': data,
-                                    'Descrição': descricao,
-                                    'Valor': float(valor_str),
-                                    'Tipo': tipo,
-                                    'Saldo': float(saldo_str)
-                                })
-                            elif len(groups) == 7:  # Padrão Caixa
-                                data = groups[0]
-                                documento = groups[1]
-                                descricao = groups[2].strip()
-                                valor_str = groups[3].replace('.', '').replace(',', '.')
-                                tipo = groups[4]
-                                saldo_str = groups[5].replace('.', '').replace(',', '.')
-                                
-                                transactions.append({
-                                    'Banco': metadata['banco'],
-                                    'Agência': metadata['agencia'],
-                                    'Conta': metadata['conta'],
-                                    'Data': data,
-                                    'Documento': documento,
-                                    'Descrição': descricao,
-                                    'Valor': float(valor_str),
-                                    'Tipo': tipo,
-                                    'Saldo': float(saldo_str)
-                                })
-                            elif len(groups) == 5:  # Padrões com 5 grupos
-                                data = groups[0]
-                                descricao = groups[1].strip()
-                                
-                                if groups[4] in ['D', 'C']:  # Tipo no final
-                                    valor_str = groups[2].replace('.', '').replace(',', '.')
-                                    tipo = groups[4]
-                                    saldo_str = groups[3].replace('.', '').replace(',', '.')
-                                elif groups[4] in ['+', '-']:  # Sinal no final
-                                    documento = groups[2]
-                                    valor_str = groups[3].replace('.', '').replace(',', '.')
-                                    tipo = 'D' if groups[4] == '-' else 'C'
-                                    saldo_str = '0'
-                                
-                                transactions.append({
-                                    'Banco': metadata['banco'],
-                                    'Agência': metadata['agencia'],
-                                    'Conta': metadata['conta'],
-                                    'Data': data,
-                                    'Descrição': descricao,
-                                    'Valor': float(valor_str),
-                                    'Tipo': tipo,
-                                    'Saldo': float(saldo_str) if saldo_str != '0' else 0.0
-                                })
-                            elif len(groups) == 4:  # Padrões com 4 grupos
-                                data = groups[0]
-                                descricao = groups[1].strip()
-                                valor_str = groups[2].replace('.', '').replace(',', '.')
-                                
-                                if groups[3] in ['D', 'C']:
-                                    tipo = groups[3]
-                                    saldo_str = '0'
-                                else:
-                                    saldo_str = groups[3].replace('.', '').replace(',', '.')
-                                    tipo = 'D' if valor_str.startswith('-') else 'C'
-                                    valor_str = valor_str.replace('-', '')
-                                
-                                transactions.append({
-                                    'Banco': metadata['banco'],
-                                    'Agência': metadata['agencia'],
-                                    'Conta': metadata['conta'],
-                                    'Data': data,
-                                    'Descrição': descricao,
-                                    'Valor': float(valor_str),
-                                    'Tipo': tipo,
-                                    'Saldo': float(saldo_str) if saldo_str != '0' else 0.0
-                                })
-                            elif len(groups) == 3:  # Padrão simples
-                                data = groups[0]
-                                descricao = groups[1].strip()
-                                valor_str = groups[2].replace('.', '').replace(',', '.')
-                                
-                                tipo = 'D' if valor_str.startswith('-') else 'C'
-                                valor = float(valor_str.replace('-', ''))
-                                
-                                transactions.append({
-                                    'Banco': metadata['banco'],
-                                    'Agência': metadata['agencia'],
-                                    'Conta': metadata['conta'],
-                                    'Data': data,
-                                    'Descrição': descricao,
-                                    'Valor': valor,
-                                    'Tipo': tipo,
-                                    'Saldo': 0.0
-                                })
-                            
-                        except Exception as e:
+                            transactions.append({
+                                'Data': current_date,
+                                'Documento': '',
+                                'Descrição': descricao,
+                                'Valor': float(valor_str),
+                                'Tipo': tipo,
+                                'Saldo': 0.0
+                            })
+                        except:
                             continue
-                    
-                    if transactions:  # Se encontrou transações, para
-                        break
     
-    except Exception as e:
-        print(f"Erro ao processar PDF: {e}")
-        return [], metadata
-    
-    # Remover duplicatas
-    seen = set()
-    unique_transactions = []
-    for t in transactions:
-        key = (t['Data'], t['Descrição'], t['Valor'])
-        if key not in seen:
-            seen.add(key)
-            unique_transactions.append(t)
-    
-    return unique_transactions, metadata
+    print(f"Total de transações encontradas: {len(transactions)}")
+    return transactions
 
 def main():
-    # Definir pastas
-    input_dir = Path("data/input")
-    output_dir = Path("data/output")
+    script_dir = Path(__file__).parent
+    input_dir = script_dir.parent / "data" / "input"
+    output_dir = script_dir.parent / "data" / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    # Processar todos os PDFs encontrados
     pdf_files = list(input_dir.glob("*.pdf"))
     
     if not pdf_files:
@@ -229,26 +413,61 @@ def main():
         print(f"Processando: {pdf_path.name}")
         print(f"{'='*60}")
         
-        transactions, metadata = extract_generic_data(pdf_path)
-        
-        if not transactions:
-            print("Nenhuma transação encontrada")
-            continue
-        
-        # Criar DataFrame
-        df = pd.DataFrame(transactions)
-        
-        # Salvar em Excel na pasta output
-        output_path = output_dir / (pdf_path.stem + "_generico_extraido.xlsx")
-        df.to_excel(output_path, index=False)
-        
-        print(f"Banco detectado: {metadata['banco']}")
-        print(f"Agência: {metadata['agencia']}")
-        print(f"Conta: {metadata['conta']}")
-        print(f"Dados extraídos salvos em: {output_path}")
-        print(f"Total de transações: {len(transactions)}")
-        print("\nPrimeiras 3 transações:")
-        print(df.head(3).to_string(index=False))
+        try:
+            with pdfplumber.open(pdf_path) as pdf:
+                # Detectar banco
+                first_page_text = pdf.pages[0].extract_text() if pdf.pages else ""
+                bank_name = detect_bank(first_page_text, pdf_path.name)
+                
+                # Extrair metadados
+                metadata = extract_metadata(first_page_text, bank_name)
+                
+                # Extrair transações de TODAS as páginas
+                transactions = extract_transactions_all_pages(pdf, bank_name)
+                
+                if not transactions:
+                    print("Nenhuma transação encontrada")
+                    continue
+                
+                # Remover duplicatas
+                seen = set()
+                unique_transactions = []
+                for t in transactions:
+                    key = (t['Data'], t['Descrição'], t['Valor'])
+                    if key not in seen:
+                        seen.add(key)
+                        # Adicionar metadados
+                        t['Banco'] = metadata['banco']
+                        t['Código Banco'] = metadata['codigo_banco']
+                        t['Agência'] = metadata['agencia']
+                        t['Conta'] = metadata['conta']
+                        unique_transactions.append(t)
+                
+                # Ordenar
+                df = pd.DataFrame(unique_transactions)
+                df['Data_Sort'] = pd.to_datetime(df['Data'], format='%d/%m/%Y', errors='coerce')
+                df['Data_Sort'] = df['Data_Sort'].fillna(pd.to_datetime(df['Data'], format='%d/%m', errors='coerce'))
+                df = df.sort_values(['Data_Sort', 'Documento', 'Descrição'], na_position='last')
+                df = df.drop('Data_Sort', axis=1)
+                
+                # Reorganizar colunas
+                cols = ['Banco', 'Código Banco', 'Agência', 'Conta', 'Data', 'Documento', 'Descrição', 'Valor', 'Tipo', 'Saldo']
+                df = df.reindex(columns=[col for col in cols if col in df.columns])
+                
+                # Salvar
+                output_path = output_dir / (pdf_path.stem + "_generico_extraido.xlsx")
+                df.to_excel(output_path, index=False)
+                
+                print(f"Banco detectado: {metadata['banco']}")
+                print(f"Agência: {metadata['agencia']}")
+                print(f"Conta: {metadata['conta']}")
+                print(f"Dados extraídos salvos em: {output_path}")
+                print(f"Total de transações: {len(unique_transactions)}")
+                print("\nPrimeiras 3 transações:")
+                print(df.head(3).to_string(index=False))
+                
+        except Exception as e:
+            print(f"Erro ao processar {pdf_path.name}: {e}")
     
     print(f"\n{'='*60}")
     print(f"Processamento concluído para {len(pdf_files)} arquivos")

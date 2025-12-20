@@ -21,89 +21,102 @@ def extract_caixa_data(pdf_path):
     
     try:
         with pdfplumber.open(pdf_path) as pdf:
+            print(f"Processando {len(pdf.pages)} páginas...")
+            
             # Extrair metadados da primeira página
             if pdf.pages:
                 first_page_text = pdf.pages[0].extract_text()
                 if first_page_text:
                     # Extrair conta
-                    conta_match = re.search(r'Conta Referência:\s*(\d+/\d+/\d+-\d+)', first_page_text)
+                    conta_match = re.search(r'Conta[:\s]*(\d+[/-]\d+[/-]\d+[-]\d+)', first_page_text)
                     if conta_match:
                         metadata['conta'] = conta_match.group(1)
                     
                     # Extrair período
-                    periodo_match = re.search(r'Período:\s*de:\s*(\d{2}/\d{2}/\d{4})\s*até:\s*(\d{2}/\d{2}/\d{4})', first_page_text)
+                    periodo_match = re.search(r'(\d{2}/\d{2}/\d{4})\s+[ae]\s+(\d{2}/\d{2}/\d{4})', first_page_text)
                     if periodo_match:
                         metadata['periodo'] = f"{periodo_match.group(1)} a {periodo_match.group(2)}"
             
+            # Processar todas as páginas
             for page_num, page in enumerate(pdf.pages):
                 text = page.extract_text()
                 if not text:
                     continue
                 
-
+                lines = text.split('\n')
+                print(f"Página {page_num + 1}: {len(lines)} linhas")
                 
-                # Múltiplos padrões para Caixa baseados no formato real
-                patterns = [
-                    # Padrão 1: Data, documento, descrição, valor+D/C, saldo+D/C
-                    r'(\d{2}/\d{2}/\d{4})\s+(\d+)\s+(.+?)\s+([\d.,]+)([DC])\s+([\d.,]+)([DC])',
-                    # Padrão 2: Data, descrição, valor+D/C, saldo+D/C
-                    r'(\d{2}/\d{2}/\d{4})\s+(.+?)\s+([\d.,]+)([DC])\s+([\d.,]+)([DC])',
-                    # Padrão 3: Formato mais simples
-                    r'(\d{2}/\d{2}/\d{4})\s+(.+?)\s+([\d.,]+)([DC])'
-                ]
-                
-                for pattern_num, pattern in enumerate(patterns):
-                    matches = list(re.finditer(pattern, text))
+                for line in lines:
+                    line = line.strip()
+                    if not line or line.startswith(('Data', 'Página', 'Consulta')):
+                        continue
                     
-                    for match in matches:
-                        try:
-                            groups = match.groups()
-
+                    # Padrão Caixa: DD/MM/YYYY DOCUMENTO DESCRIÇÃO VALOR+D/C SALDO+D/C
+                    caixa_match = re.search(r'(\d{2}/\d{2}/\d{4})\s+(\d+)\s+(.+?)\s+([\d.,]+)([DC])\s+([\d.,]+)([DC])', line)
+                    if caixa_match:
+                        data = caixa_match.group(1)
+                        documento = caixa_match.group(2)
+                        descricao = caixa_match.group(3).strip()
+                        valor_str = caixa_match.group(4).replace('.', '').replace(',', '.')
+                        tipo = caixa_match.group(5)
+                        saldo_str = caixa_match.group(6).replace('.', '').replace(',', '.')
+                        
+                        transactions.append({
+                            'Banco': metadata['banco'],
+                            'Código Banco': metadata['codigo_banco'],
+                            'Agência': metadata['agencia'],
+                            'Conta': metadata['conta'],
+                            'Data': data,
+                            'Documento': documento,
+                            'Descrição': descricao,
+                            'Valor': float(valor_str),
+                            'Tipo': tipo,
+                            'Saldo': float(saldo_str)
+                        })
+                        continue
+                    
+                    # Padrão sem documento: DD/MM/YYYY DESCRIÇÃO VALOR+D/C SALDO+D/C
+                    caixa_simple = re.search(r'(\d{2}/\d{2}/\d{4})\s+(.+?)\s+([\d.,]+)([DC])\s+([\d.,]+)([DC])', line)
+                    if caixa_simple:
+                        data = caixa_simple.group(1)
+                        descricao = caixa_simple.group(2).strip()
+                        valor_str = caixa_simple.group(3).replace('.', '').replace(',', '.')
+                        tipo = caixa_simple.group(4)
+                        saldo_str = caixa_simple.group(5).replace('.', '').replace(',', '.')
+                        
+                        transactions.append({
+                            'Banco': metadata['banco'],
+                            'Código Banco': metadata['codigo_banco'],
+                            'Agência': metadata['agencia'],
+                            'Conta': metadata['conta'],
+                            'Data': data,
+                            'Documento': '',
+                            'Descrição': descricao,
+                            'Valor': float(valor_str),
+                            'Tipo': tipo,
+                            'Saldo': float(saldo_str)
+                        })
+                        continue
+                    
+                    # Padrão flexível: qualquer linha com data
+                    caixa_flex = re.search(r'(\d{2}/\d{2}/\d{4})\s+(.+)', line)
+                    if caixa_flex:
+                        data = caixa_flex.group(1)
+                        resto = caixa_flex.group(2).strip()
+                        
+                        # Tentar extrair valor e tipo do final
+                        valor_match = re.search(r'([\d.,]+)([DC])\s*$', resto)
+                        if valor_match:
+                            valor_str = valor_match.group(1).replace('.', '').replace(',', '.')
+                            tipo = valor_match.group(2)
+                            descricao = resto[:valor_match.start()].strip()
                             
-                            if len(groups) == 7:  # Padrão completo com documento
-                                data = groups[0]
-                                documento = groups[1]
-                                descricao = groups[2].strip()
-                                valor_str = groups[3].replace('.', '').replace(',', '.')
-                                tipo = groups[4]
-                                saldo_str = groups[5].replace('.', '').replace(',', '.')
-                                saldo_tipo = groups[6]
-                                
+                            if len(descricao) > 3:
                                 transactions.append({
                                     'Banco': metadata['banco'],
                                     'Código Banco': metadata['codigo_banco'],
                                     'Agência': metadata['agencia'],
                                     'Conta': metadata['conta'],
-                                    'Data': data,
-                                    'Documento': documento,
-                                    'Descrição': descricao,
-                                    'Valor': float(valor_str),
-                                    'Tipo': tipo,
-                                    'Saldo': float(saldo_str)
-                                })
-                            elif len(groups) == 6:  # Sem documento
-                                data = groups[0]
-                                descricao = groups[1].strip()
-                                valor_str = groups[2].replace('.', '').replace(',', '.')
-                                tipo = groups[3]
-                                saldo_str = groups[4].replace('.', '').replace(',', '.')
-                                saldo_tipo = groups[5]
-                                
-                                transactions.append({
-                                    'Data': data,
-                                    'Documento': '',
-                                    'Descrição': descricao,
-                                    'Valor': float(valor_str),
-                                    'Tipo': tipo,
-                                    'Saldo': float(saldo_str)
-                                })
-                            elif len(groups) == 4:  # Formato simples
-                                data = groups[0]
-                                descricao = groups[1].strip()
-                                valor_str = groups[2].replace('.', '').replace(',', '.')
-                                tipo = groups[3]
-                                
-                                transactions.append({
                                     'Data': data,
                                     'Documento': '',
                                     'Descrição': descricao,
@@ -111,12 +124,8 @@ def extract_caixa_data(pdf_path):
                                     'Tipo': tipo,
                                     'Saldo': 0.0
                                 })
-                            
-                        except Exception as e:
-                            continue
-                    
-                    if transactions:
-                        break
+            
+            print(f"Total de transações encontradas: {len(transactions)}")
     
     except Exception as e:
         print(f"Erro ao processar PDF: {e}")
@@ -126,21 +135,23 @@ def extract_caixa_data(pdf_path):
 
 def main():
     # Definir pastas
-    input_dir = Path("data/input")
-    output_dir = Path("data/output")
+    script_dir = Path(__file__).parent
+    input_dir = script_dir.parent / "data" / "input"
+    output_dir = script_dir.parent / "data" / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
     
     # Procurar PDFs da Caixa na pasta input
     caixa_files = []
     for pdf_file in input_dir.glob("*.pdf"):
-        if any(word in pdf_file.name.upper() for word in ["CAIXA", "CEF", "104"]):
+        if pdf_file.name.upper().startswith("CEF") or any(word in pdf_file.name.upper() for word in ["CAIXA", "104"]):
             caixa_files.append(pdf_file)
     
     if not caixa_files:
         print("Nenhum PDF da Caixa encontrado em data/input/")
         return
     
-    pdf_path = caixa_files[0]
+    # Priorizar PDFs que começam com CEF
+    pdf_path = next((f for f in caixa_files if f.name.upper().startswith("CEF")), caixa_files[0])
     
     print(f"Processando extrato da Caixa: {pdf_path.name}")
     
@@ -152,6 +163,11 @@ def main():
     
     # Criar DataFrame
     df = pd.DataFrame(transactions)
+    
+    # Ordenar por data, documento, descrição
+    df['Data_Sort'] = pd.to_datetime(df['Data'], format='%d/%m/%Y', errors='coerce')
+    df = df.sort_values(['Data_Sort', 'Documento', 'Descrição'], na_position='last')
+    df = df.drop('Data_Sort', axis=1)
     
     # Salvar em Excel na pasta output
     output_path = output_dir / (pdf_path.stem + "_caixa_extraido.xlsx")

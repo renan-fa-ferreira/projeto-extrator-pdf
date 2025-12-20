@@ -7,11 +7,12 @@ __pycache__/
 venv/
 .env
 
-# Dados sensíveis
+# Dados sensíveis e arquivos grandes
 data/input/*.pdf
 data/output/*.xlsx
 *.pdf
 *.xlsx
+*.xls
 
 # Logs e temporários
 logs/
@@ -19,15 +20,25 @@ logs/
 data/temp/*
 !data/temp/.gitkeep
 
-# Pastas não essenciais
+# Pastas obsoletas e testes
 obsoleto/
 tools/
 tests/
+test/
 docs/
 config/
+exemplos/
+backup/
+old/
 
 # IDEs e OS
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
+*.swp
+*.swo
+
+# Manter estrutura de pastas
+!data/input/.gitkeep
+!data/output/.gitkeep

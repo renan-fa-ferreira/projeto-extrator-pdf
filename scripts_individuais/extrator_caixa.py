@@ -1,18 +1,17 @@
 #!/usr/bin/env python3
-"""Extrator individual para Caixa Econômica Federal"""
+"""Extrator individual para Caixa Economica Federal"""
 
 import pdfplumber
 import pandas as pd
 import re
-import sys
 from pathlib import Path
-from datetime import datetime
 
 def extract_caixa_data(pdf_path):
     """Extrai dados do extrato da Caixa"""
     transactions = []
+    log_info = {'arquivo': pdf_path.name, 'paginas': 0, 'transacoes': 0}
     metadata = {
-        'banco': 'Caixa Econômica Federal',
+        'banco': 'Caixa Economica Federal',
         'codigo_banco': '104',
         'agencia': '',
         'conta': '',
@@ -21,31 +20,25 @@ def extract_caixa_data(pdf_path):
     
     try:
         with pdfplumber.open(pdf_path) as pdf:
+            log_info['paginas'] = len(pdf.pages)
             print(f"Processando {len(pdf.pages)} páginas...")
             
-            # Extrair metadados da primeira página
             if pdf.pages:
                 first_page_text = pdf.pages[0].extract_text()
                 if first_page_text:
-                    # Extrair conta
                     conta_match = re.search(r'Conta[:\s]*(\d+[/-]\d+[/-]\d+[-]\d+)', first_page_text)
                     if conta_match:
                         metadata['conta'] = conta_match.group(1)
-                    
-                    # Extrair período
                     periodo_match = re.search(r'(\d{2}/\d{2}/\d{4})\s+[ae]\s+(\d{2}/\d{2}/\d{4})', first_page_text)
                     if periodo_match:
                         metadata['periodo'] = f"{periodo_match.group(1)} a {periodo_match.group(2)}"
             
-            # Processar todas as páginas
             for page_num, page in enumerate(pdf.pages):
                 text = page.extract_text()
                 if not text:
                     continue
                 
                 lines = text.split('\n')
-                print(f"Página {page_num + 1}: {len(lines)} linhas")
-                
                 for line in lines:
                     line = line.strip()
                     if not line or line.startswith(('Data', 'Página', 'Consulta')):
@@ -61,21 +54,27 @@ def extract_caixa_data(pdf_path):
                         tipo = caixa_match.group(5)
                         saldo_str = caixa_match.group(6).replace('.', '').replace(',', '.')
                         
+                        try:
+                            valor = float(valor_str)
+                            saldo = float(saldo_str)
+                        except ValueError:
+                            continue
+                        
                         transactions.append({
                             'Banco': metadata['banco'],
-                            'Código Banco': metadata['codigo_banco'],
-                            'Agência': metadata['agencia'],
+                            'Codigo Banco': metadata['codigo_banco'],
+                            'Agencia': metadata['agencia'],
                             'Conta': metadata['conta'],
                             'Data': data,
                             'Documento': documento,
-                            'Descrição': descricao,
-                            'Valor': float(valor_str),
+                            'Descricao': descricao,
+                            'Valor': f"{valor:.2f}".replace('.', ','),
                             'Tipo': tipo,
-                            'Saldo': float(saldo_str)
+                            'Saldo': f"{saldo:.2f}".replace('.', ',')
                         })
                         continue
                     
-                    # Padrão sem documento: DD/MM/YYYY DESCRIÇÃO VALOR+D/C SALDO+D/C
+                    # Padrão sem documento
                     caixa_simple = re.search(r'(\d{2}/\d{2}/\d{4})\s+(.+?)\s+([\d.,]+)([DC])\s+([\d.,]+)([DC])', line)
                     if caixa_simple:
                         data = caixa_simple.group(1)
@@ -84,105 +83,78 @@ def extract_caixa_data(pdf_path):
                         tipo = caixa_simple.group(4)
                         saldo_str = caixa_simple.group(5).replace('.', '').replace(',', '.')
                         
+                        try:
+                            valor = float(valor_str)
+                            saldo = float(saldo_str)
+                        except ValueError:
+                            continue
+                        
                         transactions.append({
                             'Banco': metadata['banco'],
-                            'Código Banco': metadata['codigo_banco'],
-                            'Agência': metadata['agencia'],
+                            'Codigo Banco': metadata['codigo_banco'],
+                            'Agencia': metadata['agencia'],
                             'Conta': metadata['conta'],
                             'Data': data,
                             'Documento': '',
-                            'Descrição': descricao,
-                            'Valor': float(valor_str),
+                            'Descricao': descricao,
+                            'Valor': f"{valor:.2f}".replace('.', ','),
                             'Tipo': tipo,
-                            'Saldo': float(saldo_str)
+                            'Saldo': f"{saldo:.2f}".replace('.', ',')
                         })
-                        continue
-                    
-                    # Padrão flexível: qualquer linha com data
-                    caixa_flex = re.search(r'(\d{2}/\d{2}/\d{4})\s+(.+)', line)
-                    if caixa_flex:
-                        data = caixa_flex.group(1)
-                        resto = caixa_flex.group(2).strip()
-                        
-                        # Tentar extrair valor e tipo do final
-                        valor_match = re.search(r'([\d.,]+)([DC])\s*$', resto)
-                        if valor_match:
-                            valor_str = valor_match.group(1).replace('.', '').replace(',', '.')
-                            tipo = valor_match.group(2)
-                            descricao = resto[:valor_match.start()].strip()
-                            
-                            if len(descricao) > 3:
-                                transactions.append({
-                                    'Banco': metadata['banco'],
-                                    'Código Banco': metadata['codigo_banco'],
-                                    'Agência': metadata['agencia'],
-                                    'Conta': metadata['conta'],
-                                    'Data': data,
-                                    'Documento': '',
-                                    'Descrição': descricao,
-                                    'Valor': float(valor_str),
-                                    'Tipo': tipo,
-                                    'Saldo': 0.0
-                                })
             
             print(f"Total de transações encontradas: {len(transactions)}")
     
     except Exception as e:
         print(f"Erro ao processar PDF: {e}")
-        return [], metadata
+        return [], metadata, log_info
     
-    return transactions, metadata
+    log_info['transacoes'] = len(transactions)
+    return transactions, metadata, log_info
 
 def main():
-    # Definir pastas
     script_dir = Path(__file__).parent
     input_dir = script_dir.parent / "data" / "input"
     output_dir = script_dir.parent / "data" / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    # Procurar PDFs da Caixa na pasta input
     caixa_files = []
     for pdf_file in input_dir.glob("*.pdf"):
-        if pdf_file.name.upper().startswith("CEF") or any(word in pdf_file.name.upper() for word in ["CAIXA", "104"]):
+        if any(word in pdf_file.name.upper() for word in ["CAIXA", "104", "CEF"]):
             caixa_files.append(pdf_file)
     
     if not caixa_files:
         print("Nenhum PDF da Caixa encontrado em data/input/")
         return
     
-    # Priorizar PDFs que começam com CEF
-    pdf_path = next((f for f in caixa_files if f.name.upper().startswith("CEF")), caixa_files[0])
+    all_transactions = []
+    processed_files = 0
+    logs = []
     
-    print(f"Processando extrato da Caixa: {pdf_path.name}")
+    for pdf_path in caixa_files:
+        print(f"\nProcessando: {pdf_path.name}")
+        transactions, metadata, log_info = extract_caixa_data(pdf_path)
+        logs.append(log_info)
+        
+        if transactions:
+            all_transactions.extend(transactions)
+            processed_files += 1
+            
+            df = pd.DataFrame(transactions)
+            df['Data_Sort'] = pd.to_datetime(df['Data'], format='%d/%m/%Y', errors='coerce')
+            df = df.sort_values(['Data_Sort', 'Documento', 'Descricao'], na_position='last')
+            df = df.drop('Data_Sort', axis=1)
+            
+            output_path = output_dir / (pdf_path.stem + "_caixa_extraido.csv")
+            df.to_csv(output_path, index=False, encoding='utf-8', sep=';')
+            print(f"Dados extraidos salvos em: {output_path}")
+            print(f"Total de transações: {len(transactions)}")
     
-    transactions, metadata = extract_caixa_data(pdf_path)
-    
-    if not transactions:
-        print("Nenhuma transação encontrada")
-        return
-    
-    # Criar DataFrame
-    df = pd.DataFrame(transactions)
-    
-    # Ordenar por data, documento, descrição
-    df['Data_Sort'] = pd.to_datetime(df['Data'], format='%d/%m/%Y', errors='coerce')
-    df = df.sort_values(['Data_Sort', 'Documento', 'Descrição'], na_position='last')
-    df = df.drop('Data_Sort', axis=1)
-    
-    # Salvar em Excel na pasta output
-    output_path = output_dir / (pdf_path.stem + "_caixa_extraido.xlsx")
-    df.to_excel(output_path, index=False)
-    
-    print(f"Metadados extraídos:")
-    print(f"  Banco: {metadata['banco']}")
-    print(f"  Código: {metadata['codigo_banco']}")
-    print(f"  Agência: {metadata['agencia']}")
-    print(f"  Conta: {metadata['conta']}")
-    print(f"  Período: {metadata['periodo']}")
-    print(f"Dados extraídos salvos em: {output_path}")
-    print(f"Total de transações: {len(transactions)}")
-    print("\nPrimeiras 5 transações:")
-    print(df.head().to_string(index=False))
+    # Salvar logs
+    if logs:
+        logs_df = pd.DataFrame(logs)
+        logs_path = output_dir / "caixa_logs.csv"
+        logs_df.to_csv(logs_path, index=False, encoding='utf-8', sep=';')
+        print(f"\nLogs salvos em: {logs_path}")
 
 if __name__ == "__main__":
     main()

@@ -155,7 +155,18 @@ def extract_metadata(text, bank_name):
         if agencia_conta_match:
             metadata['agencia'] = agencia_conta_match.group(1)
             metadata['conta'] = agencia_conta_match.group(2)
+        # Padrão mensal: ag XXXX cc XXXXX-X
+        if not metadata['agencia']:
+            mensal_match = re.search(r'ag\s+(\d+)\s+cc\s+(\d+-\d+)', text)
+            if mensal_match:
+                metadata['agencia'] = mensal_match.group(1)
+                metadata['conta'] = mensal_match.group(2)
         periodo_match = re.search(r'Extrato de\s+(\d{2}/\d{2}/\d{4})\s+até\s+(\d{2}/\d{2}/\d{4})', text)
+        # Período mensal
+        if not 'periodo_match' in locals() or not periodo_match:
+            mes_match = re.search(r'(jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez)\s+(\d{4})', text, re.IGNORECASE)
+            if mes_match:
+                metadata['periodo'] = f"{mes_match.group(1).title()} {mes_match.group(2)}"
     elif 'BV' in bank_name or 'Votorantim' in bank_name:
         conta_match = re.search(r'Conta:\s*([\d.-]+)', text)
         periodo_match = re.search(r'Período:\s*(\d{2}/\d{2}/\d{4})\s+à\s+(\d{2}/\d{2}/\d{4})', text)
@@ -232,14 +243,13 @@ def extract_transactions_all_pages(pdf, bank_name):
                     continue
             
             elif 'Itaú' in bank_name:
-                # DD/MM DESCRIÇÃO DOCUMENTO VALOR
-                itau_match = re.search(r'^(\d{2}/\d{2})\s+(.+?)\s+(\d+)\s+([+-]?[\d.,]+)$', line)
-                if itau_match:
-                    data = itau_match.group(1)
-                    descricao = itau_match.group(2).strip()
-                    documento = itau_match.group(3)
-                    valor_str = itau_match.group(4).replace('.', '').replace(',', '.')
-                    
+                # Layout 1: DD/MM DESCRIÇÃO AGENCIA.CONTA-DIGITO VALOR
+                itau_layout1 = re.search(r'^(\d{2}/\d{2})\s+(.+?)\s+(\d{4}\.\d{5}-\d)\s+([+-]?[\d.,]+)$', line)
+                if itau_layout1:
+                    data = itau_layout1.group(1)
+                    descricao = itau_layout1.group(2).strip()
+                    documento = itau_layout1.group(3)
+                    valor_str = itau_layout1.group(4).replace('.', '').replace(',', '.')
                     tipo = 'D' if valor_str.startswith('-') else 'C'
                     valor = float(valor_str.replace('-', ''))
                     
@@ -251,26 +261,96 @@ def extract_transactions_all_pages(pdf, bank_name):
                         'Tipo': tipo,
                         'Saldo': 0.0
                     })
+                    continue
                 
-                # DD/MM DESCRIÇÃO VALOR
-                else:
-                    itau_simple = re.search(r'^(\d{2}/\d{2})\s+(.+?)\s+([+-]?[\d.,]+)$', line)
-                    if itau_simple:
-                        data = itau_simple.group(1)
-                        descricao = itau_simple.group(2).strip()
-                        valor_str = itau_simple.group(3).replace('.', '').replace(',', '.')
-                        
-                        tipo = 'D' if valor_str.startswith('-') else 'C'
-                        valor = float(valor_str.replace('-', ''))
-                        
-                        transactions.append({
-                            'Data': data,
-                            'Documento': '',
-                            'Descrição': descricao,
-                            'Valor': valor,
-                            'Tipo': tipo,
-                            'Saldo': 0.0
-                        })
+                # Layout 2: DD/MM DESCRIÇÃO DOCUMENTO VALOR
+                itau_layout2 = re.search(r'^(\d{2}/\d{2})\s+(.+?)\s+(\d+)\s+([+-]?[\d.,]+)$', line)
+                if itau_layout2:
+                    data = itau_layout2.group(1)
+                    descricao = itau_layout2.group(2).strip()
+                    documento = itau_layout2.group(3)
+                    valor_str = itau_layout2.group(4).replace('.', '').replace(',', '.')
+                    tipo = 'D' if valor_str.startswith('-') else 'C'
+                    valor = float(valor_str.replace('-', ''))
+                    
+                    transactions.append({
+                        'Data': data,
+                        'Documento': documento,
+                        'Descrição': descricao,
+                        'Valor': valor,
+                        'Tipo': tipo,
+                        'Saldo': 0.0
+                    })
+                    continue
+                
+                # Layout 3: DD/MM DESCRIÇÃO VALOR (sem documento)
+                itau_layout3 = re.search(r'^(\d{2}/\d{2})\s+(.+?)\s+([+-]?[\d.,]+)$', line)
+                if itau_layout3:
+                    data = itau_layout3.group(1)
+                    descricao = itau_layout3.group(2).strip()
+                    valor_str = itau_layout3.group(3).replace('.', '').replace(',', '.')
+                    
+                    # Filtrar linhas inválidas
+                    if (len(descricao) < 5 or 
+                        any(word in descricao.upper() for word in ['SALDO', 'TOTAL', 'EXTRATO'])):
+                        continue
+                    
+                    tipo = 'D' if valor_str.startswith('-') else 'C'
+                    valor = float(valor_str.replace('-', ''))
+                    
+                    transactions.append({
+                        'Data': data,
+                        'Documento': '',
+                        'Descrição': descricao,
+                        'Valor': valor,
+                        'Tipo': tipo,
+                        'Saldo': 0.0
+                    })
+                    continue
+                
+                # Layout 4: DD/MM/YYYY DESCRIÇÃO VALOR (data completa)
+                itau_layout4 = re.search(r'^(\d{2}/\d{2}/\d{4})\s+(.+?)\s+([+-]?[\d.,]+)$', line)
+                if itau_layout4:
+                    data = itau_layout4.group(1)
+                    descricao = itau_layout4.group(2).strip()
+                    valor_str = itau_layout4.group(3).replace('.', '').replace(',', '.')
+                    
+                    if len(descricao) < 5:
+                        continue
+                    
+                    tipo = 'D' if valor_str.startswith('-') else 'C'
+                    valor = float(valor_str.replace('-', ''))
+                    
+                    transactions.append({
+                        'Data': data,
+                        'Documento': '',
+                        'Descrição': descricao,
+                        'Valor': valor,
+                        'Tipo': tipo,
+                        'Saldo': 0.0
+                    })
+                    continue
+                
+                # Layout 5: PIX QRS NOME DD/MM VALOR (extrato mensal)
+                pix_match = re.search(r'^PIX QRS\s+(.+?)(\d{2}/\d{2})\s+([\d.,]+)$', line)
+                if pix_match:
+                    nome = pix_match.group(1).strip()
+                    data = pix_match.group(2)
+                    valor_str = pix_match.group(3).replace('.', '').replace(',', '.')
+                    
+                    # Assumir ano atual se não especificado
+                    current_year = datetime.now().year
+                    data_completa = f"{data}/{current_year}"
+                    
+                    transactions.append({
+                        'Data': data_completa,
+                        'Documento': 'PIX',
+                        'Descrição': f'PIX QRS {nome}',
+                        'Valor': float(valor_str),
+                        'Tipo': 'C',
+                        'Saldo': 0.0
+                    })
+                    continue
             
             elif 'Vortx' in bank_name:
                 # DD/MM/YYYY DESCRIÇÃO TED Recebida R$ VALOR R$ SALDO
@@ -418,6 +498,10 @@ def main():
                 # Detectar banco
                 first_page_text = pdf.pages[0].extract_text() if pdf.pages else ""
                 bank_name = detect_bank(first_page_text, pdf_path.name)
+                
+                # Se não detectou, tentar padrões específicos
+                if bank_name == 'Banco Genérico' and 'AGENCIA' in first_page_text and 'CONTA' in first_page_text:
+                    bank_name = 'Banco Santander'
                 
                 # Extrair metadados
                 metadata = extract_metadata(first_page_text, bank_name)
